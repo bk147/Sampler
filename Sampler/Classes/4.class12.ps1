@@ -1,9 +1,9 @@
-Class class12 : class1 {
+class Class12 : Class1
+{
     [string]$Name = 'Class12'
 
-    class12 ()
+    Class12 ()
     {
-        
     }
 
     [String] ToString()

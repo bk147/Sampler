@@ -7,6 +7,9 @@ RootModule = 'Sampler.psm1'
 # Version number of this module.
 ModuleVersion = '0.0.1'
 
+# Supported PSEditions
+# CompatiblePSEditions = @('Desktop','Core') # Removed to support PS 5.0
+
 # ID used to uniquely identify this module
 GUID = 'b59b8442-9cf9-4c4b-bc40-035336ace573'
 
@@ -23,7 +26,7 @@ Copyright = '(c) Gael Colas. All rights reserved.'
 Description = 'Sample Module with Pipeline scripts and its Plaster template to create a module following some of the community accepted practices.'
 
 # Minimum version of the Windows PowerShell engine required by this module
-PowerShellVersion = '5.1'
+PowerShellVersion = '5.0'
 
 # Name of the Windows PowerShell host required by this module
 # PowerShellHostName = ''
@@ -58,7 +61,7 @@ RequiredModules = @(
 # FormatsToProcess = @()
 
 # Modules to import as nested modules of the module specified in RootModule/ModuleToProcess
-# NestedModules = @()
+NestedModules = @()
 
 # Functions to export from this module
 FunctionsToExport = ''
@@ -73,7 +76,7 @@ VariablesToExport = ''
 AliasesToExport =   '*'
 
 # List of all modules packaged with this module
-# ModuleList = @()
+ModuleList      = @()
 
 # List of all files packaged with this module
 # FileList = @()
@@ -83,8 +86,21 @@ PrivateData = @{
 
         PSData = @{
 
+            # Extension for Plaster Template discoverability with `Get-PlasterTemplate -IncludeInstalledModules`
+            Extensions  = @(
+                @{
+                    Module  = 'Plaster'
+                    minimumVersion = '1.1.3'
+                    Details = @{
+                        TemplatePaths = @(
+                            'Templates\Sampler'
+                        )
+                    }
+                }
+            )
+
             # Tags applied to this module. These help with module discovery in online galleries.
-            Tags = @('Template','pipeline','plaster','DesiredStateConfiguration', 'DSC', 'DSCResourceKit', 'DSCResource')
+            Tags = @('Template','pipeline','plaster','DesiredStateConfiguration', 'DSC', 'DSCResourceKit', 'DSCResource','Windows','MacOS','Linux')
 
             # A URL to the license for this module.
             LicenseUri = 'https://github.com/gaelcolas/Sampler/blob/master/LICENSE'

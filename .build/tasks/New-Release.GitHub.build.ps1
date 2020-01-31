@@ -1,19 +1,33 @@
 param(
     # Base directory of all output (default to 'output')
-    [string]$OutputDirectory = (property OutputDirectory (Join-Path $BuildRoot 'output')),
 
+    [Parameter()]
+    [string]
+    $OutputDirectory = (property OutputDirectory (Join-Path $BuildRoot 'output')),
+
+    [Parameter()]
     $ChangelogPath = (property ChangelogPath 'CHANGELOG.md'),
 
+    [Parameter()]
+    $ReleaseNotesPath = (property ReleaseNotesPath (Join-Path $OutputDirectory 'ReleaseNotes.md')),
+
+    [Parameter()]
     [string]
     $ProjectName = (property ProjectName $(
             #Find the module manifest to deduce the Project Name
             (Get-ChildItem $BuildRoot\*\*.psd1 | Where-Object {
-                ($_.Directory.Name -match 'source|src' -or $_.Directory.Name -eq $_.BaseName) -and
-                $(try { Test-ModuleManifest $_.FullName -ErrorAction Stop }catch{$false}) }
+                    ($_.Directory.Name -match 'source|src' -or $_.Directory.Name -eq $_.BaseName) -and
+                    $(try {
+                            Test-ModuleManifest $_.FullName -ErrorAction Stop
+                        }
+                        catch {
+                            $false
+                        }) }
             ).BaseName
         )
     ),
 
+    [Parameter()]
     [string]
     $ModuleVersion = (property ModuleVersion $(
             try {
@@ -25,288 +39,175 @@ param(
             }
         )),
 
+    [Parameter()]
     [string]
-    $GitHubToken = (property GitHubToken '') # retrieves from Environment variable
+    $GitHubToken = (property GitHubToken ''), # retrieves from Environment variable
+
+    [Parameter()]
+    [string]
+    $ReleaseBranch = (property ReleaseBranch 'master'),
+
+    [Parameter()]
+    [string]
+    $GitHubConfigUserEmail = (property GitHubConfigUserEmail ''),
+
+    [Parameter()]
+    [string]
+    $GitHubConfigUserName = (property GitHubConfigUserName ''),
+
+    [Parameter()]
+    $GitHubFilesToAdd = (property GitHubFilesToAdd ''),
+
+    [Parameter()]
+    $BuildInfo = (property BuildInfo @{ }),
+
+    [Parameter()]
+    $SkipPublish = (property SkipPublish '')
 )
 
-# Synopsis: Packaging the module by Publishing to output folder (incl dependencies)
-task package_module_nupkg {
-
-    # Force registering the output repository mapping to the Project's output path
-    $null = Unregister-PSRepository -Name output -ErrorAction SilentlyContinue
-    $RepositoryParams = @{
-        Name            = 'output'
-        SourceLocation  = $OutputDirectory
-        PublishLocation = $OutputDirectory
-        ErrorAction     = 'Stop'
-    }
-
-    $null = Register-PSRepository @RepositoryParams
-
-    # Cleaning up existing packaged module
-    if ($ModuleToRemove = Get-ChildItem (Join-Path $OutputDirectory "$ProjectName.*.nupkg")) {
-        Write-Build DarkGray "  Remove existing $ProjectName package"
-        remove-item -force -Path $ModuleToRemove -ErrorAction Stop
-    }
-
-    # find Module manifest
-    $BuiltModuleManifest = (Get-ChildItem (Join-Path $OutputDirectory $ProjectName) -Depth 2 -Filter "$ProjectName.psd1").FullName
-    Write-Build DarkGray "  Built module's Manifest found at $BuiltModuleManifest"
-
-    # load module manifest
-    $ModuleInfo = Import-PowerShellDataFile -Path $BuiltModuleManifest
-
-    # Publish dependencies (from environment) so we can publish the built module
-    foreach ($module in $ModuleInfo.RequiredModules) {
-        if(!(Find-Module -repository output -Name $Module -ErrorAction SilentlyContinue)) {
-            # Replace the module by first (path & version) resolved in PSModulePath
-            $module = Get-Module -ListAvailable $module | Select-Object -First 1
-            if ($Prerelease = $module.PrivateData.PSData.Prerelease) {
-                $Prerelease = "-" + $Prerelease
-            }
-            Write-Build Yellow ("  Packaging Required Module {0} v{1}{2}" -f $Module.Name,$Module.Version.ToString(),$Prerelease)
-            Publish-Module -Repository output -ErrorAction SilentlyContinue -Path $module.ModuleBase
-        }
-    }
-
-    $PublishModuleParams = @{
-        Path       = (Join-Path $OutputDirectory $ProjectName)
-        Repository = 'output'
-        Force      = $true
-        ErrorAction = 'Stop'
-    }
-    Publish-Module @PublishModuleParams
-    Write-Build Green "`n  Packaged $ProjectName NuGet package `n"
-    Write-Build DarkGray "  Cleaning up"
-
-    $null = Unregister-PSRepository -Name output -ErrorAction SilentlyContinue
-}
+# Until I can use a third party module
+. $PSScriptRoot/GitHubRelease.functions.ps1
 
 task Publish_release_to_GitHub -if ($GitHubToken) {
+    if (!(Split-Path $OutputDirectory -IsAbsolute)) {
+        $OutputDirectory = Join-Path $BuildRoot $OutputDirectory
+    }
+
+    if (!(Split-Path -isAbsolute $ReleaseNotesPath)) {
+        $ReleaseNotesPath = Join-Path $OutputDirectory $ReleaseNotesPath
+    }
 
     if ([String]::IsNullOrEmpty($ModuleVersion)) {
         $ModuleInfo = Import-PowerShellDataFile "$OutputDirectory/$ProjectName/*/$ProjectName.psd1" -ErrorAction Stop
-        if ($ModuleInfo.PrivateData.PSData.Prerelease) {
-            $ModuleVersion = $ModuleInfo.ModuleVersion + "-" + $ModuleInfo.PrivateData.PSData.Prerelease
+        if ($PreReleaseTag = $ModuleInfo.PrivateData.PSData.Prerelease) {
+            $ModuleVersion = $ModuleInfo.ModuleVersion + "-" + $PreReleaseTag
         }
         else {
             $ModuleVersion = $ModuleInfo.ModuleVersion
         }
     }
-    # Remove metadata from ModuleVersion
-    $PSModuleVersion, $PreReleaseTag = ($ModuleVersion -split '\+',2)
-    # find Module's nupkg
-    $PackageToRelease = Get-ChildItem (Join-Path $OutputDirectory "$ProjectName.$PSModuleVersion.nupkg")
-    $ReleaseTag = "v$PSModuleVersion"
+    else {
+        # Remove metadata from ModuleVersion
+        $ModuleVersion, $BuildMetadata = $ModuleVersion -split '\+', 2
+        # Remove Prerelease tag from ModuleVersionFolder
+        $ModuleVersionFolder, $PreReleaseTag = $ModuleVersion -split '\-', 2
+    }
 
-    Write-Build DarkGray "About to release $PackageToRelease"
+    # find Module's nupkg
+    $PackageToRelease = Get-ChildItem (Join-Path $OutputDirectory "$ProjectName.$ModuleVersion.nupkg")
+    $ReleaseTag = "v$ModuleVersion"
+
+    Write-Build DarkGray "About to release $PackageToRelease v$ModuleVersion"
     $remoteURL = git remote get-url origin
 
-    if($remoteURL -notMatch 'github') {
+    if ($remoteURL -notMatch 'github') {
+        Write-Build Yellow "Skipping Publish GitHub release to $RemoteURL"
         return
     }
 
     # find owner repository / remote
     $Repo = GetHumanishRepositoryDetails -RemoteUrl $remoteURL
 
-    # Prerelease label?
-    if ($PreReleaseTag) {
-        $Prerelease = $true
-    }
-
-    # compile changelog for that version
-    if(!(Split-Path $ChangelogPath -isAbsolute)) {
-        $ChangelogPath = Join-Path $BuildRoot $ChangelogPath | Convert-Path
-    }
-
-    # Parse the Changelog and extract unreleased
-    if ((Get-Content -raw $ChangelogPath -ErrorAction SilentlyContinue) -match '\[Unreleased\](?<changeLog>[.\s\w\W]*)\n## \[') {
-        $ChangeLog = $matches.ChangeLog
+    # Retrieving ReleaseNotes or defaulting to Updated ChangeLog
+    if (Import-Module ChangelogManagement -ErrorAction SilentlyContinue -PassThru) {
+        $ReleaseNotes = (Get-ChangelogData -Path $ChangeLogPath).Unreleased.RawData -replace '\[unreleased\]', "[v$ModuleVersion]"
     }
     else {
-        $ChangeLog = Get-Content -raw $ChangelogPath -ErrorAction SilentlyContinue
+        if (-not ($ReleaseNotes = (Get-Content -raw $ReleaseNotesPath -ErrorAction SilentlyContinue))) {
+            $ReleaseNotes = Get-Content -raw $ChangeLogPath -ErrorAction SilentlyContinue
+        }
     }
 
-    # create release
-    # upload artefacts
+
+    # if you want to create the tag on /release/v$ModuleVersion branch (default to master)
+    $ReleaseBranch = $ExecutionContext.InvokeCommand.ExpandString($ReleaseBranch)
 
     $releaseParams = @{
-        Owner = $Repo.Owner
-        Repository = $Repo.Repository
-        Tag = $ReleaseTag
+        Owner       = $Repo.Owner
+        Repository  = $Repo.Repository
+        Tag         = $ReleaseTag
         ReleaseName = $ReleaseTag
-        # Branch = "release/$PSModuleVersion"
-        AssetPath = $PackageToRelease
-        Prerelease = [bool]($PreReleaseTag)
-        Description = $ChangeLog
+        Branch      = $ReleaseBranch
+        AssetPath   = $PackageToRelease
+        Prerelease  = [bool]($PreReleaseTag)
+        Description = $ReleaseNotes
         GitHubToken = $GitHubToken
     }
-    $APIResponse = Publish-GitHubRelease @releaseParams
+    if (!$SkipPublish) {
+        $APIResponse = Publish-GitHubRelease @releaseParams
+    }
     Write-Build Green "Release Created. Follow the link -> $($APIResponse.html_url)"
 }
 
-task Publish_nupkg_to_GitHub_feed {
+task Create_ChangeLog_GitHub_PR -if ($GitHubToken) {
+    # # This is how AzDO setup the environment:
+    # git init
+    # git remote add origin https://github.com/gaelcolas/Sampler
+    # git config gc.auto 0
+    # git config --get-all http.https://github.com/gaelcolas/Sampler.extraheader
+    # git pull origin master
+    # # git fetch --force --tags --prune --progress --no-recurse-submodules origin
+    # # git checkout --progress --force (git rev-parse origin/master)
 
-}
-
-
-# function GetDescriptionFromChangelog
-# {
-#     param(
-#         [Parameter(Mandatory)]
-#         [string]
-#         $ChangelogPath
-#     )
-
-#     $lines = Get-Content -Path $ChangelogPath
-#     # First two lines are the title and newline
-#     # Third looks like '## vX.Y.Z-releasetag'
-#     $sb = [System.Text.StringBuilder]::new($lines[2])
-#     # Read through until the next '## vX.Y.Z-releasetag' H2
-#     for ($i = 3; -not $lines[$i].StartsWith('## '); $i++)
-#     {
-#         $null = $sb.Append("`n").Append($lines[$i])
-#     }
-
-#     return $sb.ToString()
-# }
-
-# $tag = "v$Version"
-
-# $releaseParams = @{
-#     Owner = $TargetFork
-#     Repository = $Repository
-#     Tag = $tag
-#     ReleaseName = $tag
-#     Branch = "release/$Version"
-#     AssetPath = $AssetPath
-#     Prerelease = [bool]($Version.PreReleaseLabel)
-#     Description = GetDescriptionFromChangelog -ChangelogPath $ChangelogPath
-#     GitHubToken = $GitHubToken
-# }
-# Publish-GitHubRelease @releaseParams
-
-# from https://github.com/PowerShell/vscode-powershell/blob/master/tools/GitHubTools.psm1
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-function Publish-GitHubRelease {
-    param(
-        [Parameter(Mandatory)]
-        [string]
-        $Owner,
-
-        [Parameter(Mandatory)]
-        [string]
-        $Repository,
-
-        [Parameter(Mandatory)]
-        [string]
-        $Tag,
-
-        [Parameter(Mandatory)]
-        [string]
-        $ReleaseName,
-
-        [Parameter(Mandatory)]
-        [string]
-        $Description,
-
-        [Parameter(Mandatory)]
-        [string]
-        $GitHubToken,
-
-        [Parameter()]
-        [Alias('Branch', 'Commit')]
-        [string]
-        $Commitish,
-
-        [Parameter()]
-        [string[]]
-        $AssetPath,
-
-        [switch]
-        $Draft,
-
-        [switch]
-        $Prerelease
-    )
-
-    $restParams = @{
-        tag_name   = $Tag
-        name       = $ReleaseName
-        body       = $Description
-        draft      = [bool]$Draft
-        prerelease = [bool]$Prerelease
-    }
-
-    if ($Commitish) {
-        $restParams.target_commitish = $Commitish
-    }
-
-    $restBody = ConvertTo-Json -InputObject $restParams
-    $uri = "https://api.github.com/repos/$Owner/$Repository/releases"
-    $headers = @{
-        Accept        = 'application/vnd.github.v3+json'
-        Authorization = "token $GitHubToken"
-    }
-
-    $response = Invoke-RestMethod -Method Post -Uri $uri -Body $restBody -Headers $headers
-
-    $releaseId = $response.id
-    $assetBaseUri = "https://uploads.github.com/repos/$Owner/$Repository/releases/$releaseId/assets"
-    foreach ($asset in $AssetPath) {
-        $extension = [System.IO.Path]::GetExtension($asset)
-        $fileName = [uri]::EscapeDataString([System.IO.Path]::GetFileName($asset))
-        $contentType = 'text/plain'
-        switch ($extension) {
-            { $_ -in '.zip', '.vsix', 'nupkg' } {
-                $contentType = 'application/zip'
-                break
-            }
-
-            '.json' {
-                $contentType = 'application/json'
-                break
-            }
+    foreach ($GitHubConfigKey in @('GitHubFilesToAdd', 'GitHubConfigUserName', 'GitHubConfigUserEmail', 'UpdateChangelogOnPrerelease')) {
+        if ( -Not (Get-Variable -Name $GitHubConfigKey -ValueOnly -ErrorAction SilentlyContinue)) {
+            # Variable is not set in context, use $BuildInfo.GitHubConfig.<varName>
+            $ConfigValue = $BuildInfo.GitHubConfig.($GitHubConfigKey)
+            Set-Variable -Name $GitHubConfigKey -Value $ConfigValue
+            Write-Build DarkGray "`t...Set $GitHubConfigKey to $ConfigValue"
         }
+    }
 
-        $assetUri = "${assetBaseUri}?name=$fileName"
-        $headers = @{
-            Authorization = "token $GitHubToken"
+    git pull origin master --tag
+    # Look at the tags on latest commit for origin/master (assume we're on detached head)
+    $TagsAtCurrentPoint = git tag -l --points-at (git rev-parse origin/master)
+    # Only Update changelog if last commit is a full release
+    if ($UpdateChangelogOnPrerelease) {
+        $TagVersion = [string]($TagsAtCurrentPoint | Select-Object -First 1)
+        Write-Build Green "Updating Changelog for PRE-Release $TagVersion"
+    }
+    elseif ($TagVersion = [string]($TagsAtCurrentPoint.Where{ $_ -notMatch 'v.*\-' })) {
+        Write-Build Green "Updating the ChangeLog for release $TagVersion"
+    }
+    else {
+        Write-Build Yellow "No Release Tag found to update the ChangeLog from"
+        return
+    }
+
+    $BranchName = "updateChangelogAfter$TagVersion"
+    git checkout -B $BranchName
+    try {
+        Write-Build DarkGray "Updating Changelog file"
+        Update-Changelog -ReleaseVersion ($TagVersion -replace '^v') -LinkMode None -Path $ChangelogPath -ErrorAction SilentlyContinue
+        git add $GitHubFilesToAdd
+        git config user.name $GitHubConfigUserName
+        git config user.email $GitHubConfigUserEmail
+        git commit -m "Updating ChangeLog since $TagVersion +semver:skip"
+
+        $URI = [URI](git remote get-url origin)
+        $URI = $Uri.Scheme + [URI]::SchemeDelimiter + $GitHubToken + '@' + $URI.Authority + $URI.PathAndQuery
+
+        # Update the PUSH URI to use the Personal Access Token for Auth
+        git remote set-url --push origin $URI
+
+        # track this branch on the remote 'origin
+        git push -u origin $BranchName
+
+        # Grab the Repo info for creating new PR
+        $RepoInfo = GetHumanishRepositoryDetails -RemoteUrl (git remote get-url origin)
+
+        $NewPullRequestParams = @{
+            GitHubToken = $GitHubToken
+            Repository  = $RepoInfo.Repository
+            Owner       = $RepoInfo.Owner
+            Title       = "Updating ChangeLog since release of $TagVersion"
+            Branch      = $BranchName
+            ErrorAction = 'Stop'
         }
-        # This can be very slow, but it does work
-        $null = Invoke-RestMethod -Method Post -Uri $assetUri -InFile $asset -ContentType $contentType -Headers $headers
+        $Response = New-GitHubPullRequest @NewPullRequestParams
+        Write-Build Green "`n --> PR #$($Response.number) opened: $($Response.url)"
     }
-
-    return $response
-}
-
-# from https://github.com/PowerShell/vscode-powershell/blob/master/tools/GitHubTools.psm1
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-filter GetHumanishRepositoryDetails
-{
-    param(
-        [string]
-        $RemoteUrl
-    )
-
-    if ($RemoteUrl.EndsWith('.git'))
-    {
-        $RemoteUrl = $RemoteUrl.Substring(0, $RemoteUrl.Length - 4)
-    }
-    else
-    {
-        $RemoteUrl = $RemoteUrl.Trim('/')
-    }
-
-    $lastSlashIdx = $RemoteUrl.LastIndexOf('/')
-    $repository =  $RemoteUrl.Substring($lastSlashIdx + 1)
-    $secondLastSlashIdx = $RemoteUrl.LastIndexOfAny(('/', ':'), $lastSlashIdx - 1)
-    $Owner = $RemoteUrl.Substring($secondLastSlashIdx + 1, $lastSlashIdx - $secondLastSlashIdx - 1)
-
-    return @{
-        Owner = $Owner
-        Repository = $repository
+    catch {
+        Write-Build Red "Error trying to create ChangeLog Pull Request. Ignoring.`r`n $_"
     }
 }

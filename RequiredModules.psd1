@@ -7,33 +7,17 @@
         }
     }
 
-    invokeBuild          = 'latest'
-    PSScriptAnalyzer     = 'latest'
-    pester               = 'latest'
-    Plaster              = 'latest'
-    ModuleBuilder        = 'latest'
-    buildhelpers         = 'latest'
-    PSDeploy             = 'latest'
+    invokeBuild                 = 'latest'
+    PSScriptAnalyzer            = 'latest'
+    pester                      = 'latest'
+    Plaster                     = 'latest'
+    ModuleBuilder               = '1.0.0'
+    MarkdownLinkCheck           = 'latest'
+    ChangelogManagement         = 'latest'
+    'DscResource.Test'          = 'latest'
+    'DscResource.AnalyzerRules' = 'latest'
+    xDscResourceDesigner        = 'latest'
+    # PSPKI                       = 'latest'
+    'DscResource.Common'        = 'latest'
 
-    #required for DSC authoring
-    xDscResourceDesigner = 'latest'
-
-    # Git Clone Used to test DSC Resources (This needs to be ported to a module)
-    # 'PowerShell/DscResource.Tests' = @{
-    #     Target = '.'
-    #     parameters = @{
-    #         TargetType     = 'exact'
-    #         ExtractProject = $false
-    #     }
-    #     Version = 'master'
-    # }
-
-    'PowerShell/DscResource.Tests' = @{
-        # Target = '.'
-        parameters = @{
-            TargetType     = 'exact'
-            ExtractProject = $false
-        }
-        Version = 'master'
-    }
 }

@@ -1,13 +1,15 @@
 # This file is not needed, a COMPILED version will be built by ModuleBuilder
 ##Import Enums
 
-foreach ($Enum in (Get-ChildItem "$PSScriptRoot\Enums" -ErrorAction SilentlyContinue)) {
+foreach ($Enum in (Get-ChildItem "$PSScriptRoot\Enums" -ErrorAction SilentlyContinue))
+{
     . $Enum
 }
 
 ##Import Classes
 
-foreach ($class in (Get-ChildItem "$PSScriptRoot\Classes" -ErrorAction SilentlyContinue)) {
+foreach ($class in (Get-ChildItem "$PSScriptRoot\Classes" -ErrorAction SilentlyContinue))
+{
     . $Class
 }
 
@@ -16,14 +18,14 @@ $Public  = @( Get-ChildItem -Path $PSScriptRoot\Public\*.ps1 -ErrorAction Silent
 $Private = @( Get-ChildItem -Path $PSScriptRoot\Private\*.ps1 -ErrorAction SilentlyContinue )
 
 #Dot source the files
-Foreach($import in @($Public + $Private))
+foreach ($import in @($Public + $Private))
 {
-    Try
+    try
     {
         Write-Verbose "Importing $($Import.FullName)"
         . $import.FullName
     }
-    Catch
+    catch
     {
         Write-Error -Message "Failed to import function $($import.fullName): $_"
     }
